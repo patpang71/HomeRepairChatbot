@@ -6,21 +6,23 @@ CLI LangGraph chatbot for diagnosing home-repair problems. It remembers users an
 
 - **Python** 3.10+
 - **LangGraph** — conversation graph and routing
-- **OpenAI** — email/type normalization, tool extraction, yes/no parsing (default model `gpt-4o-mini`)
+- **OpenAI** — email/component-type/manufacturer normalization, yes/no and satisfaction parsing, tool extraction and selection parsing, and writing the short `ResolutionDetail` note and last-resolution recap (default model `gpt-4o-mini`)
 - **Tavily** — repair search (optional; mock answer if `TAVILY_API_KEY` is unset)
-- **PostgreSQL** — users, components, searches, tools, sessions
+- **PostgreSQL** — users, components, searches, tools
 
 ## Conversation flow
 
 ```
 Initializer → TavilySearch → ToolRecommendation → CheckResult
-                  ↑_________________________________|
-                  (not fixed + optional follow-up problem)
+                  ↑                                    │
+                  └────────────────────────────────────┘
+      not fixed (search again, optionally with a follow-up problem)
+      fixed + "another repair?" yes (start a new component)
 ```
 
 | Node | Role |
 |------|------|
-| **Initializer** | Collect email; create or load user; greet; review last `ResolutionDetail` if any |
+| **Initializer** | Collect email; create or load user (new users give `StreetAddress \| City \| State \| Zip` and a Preference); greet; for returning users, recap the last `ResolutionDetail` and ask if it is settled — satisfied marks that component resolved and starts a new one, otherwise resumes the same component with a new problem |
 | **TavilySearch** | Intake (type → optional reuse of same type → manufacturer → problem); search; save `SearchResult` |
 | **ToolRecommendation** | Extract tools/parts from search; match `ToolRecommandation` catalog; save chosen items to `ToolSelected` |
 | **CheckResult** | Capture satisfaction + resolution summary; mark resolved or chain a new search; offer another job |
@@ -40,8 +42,9 @@ HomeRepairChatbot/
 ├── requirements-dev.txt    # pytest
 ├── db/
 │   ├── connection.py
-│   ├── schema.sql          # Full schema + seed catalog
-│   └── migrate_component_type.sql
+│   ├── schema.sql          # Full schema + seed catalog (fresh databases)
+│   ├── migrate_component_type.sql   # Older DBs: enum Type -> ComponentType table
+│   └── migrate_user_preference.sql  # Older DBs: add User.Preference
 ├── tools/                  # One module per DB tool
 ├── graph/
 │   ├── __init__.py         # Graph wiring + route_entry
@@ -88,7 +91,17 @@ Apply schema + seed data:
 PGPASSWORD=home_repair_pass psql -h localhost -U home_repair_user -d home_repair_db -f db/schema.sql
 ```
 
-Tables: `User`, `ComponentType`, `HomeComponent`, `SearchResult`, `Session`, `ToolRecommandation`, `ToolSelected`.
+**Existing database?** `schema.sql` only creates missing tables; it does not alter ones that already exist. If your database predates the current schema, run whichever migrations apply:
+
+```bash
+# Add User.Preference (safe to re-run)
+PGPASSWORD=home_repair_pass psql -h localhost -U home_repair_user -d home_repair_db -f db/migrate_user_preference.sql
+
+# Move from the old enum Type column to the ComponentType table
+PGPASSWORD=home_repair_pass psql -h localhost -U home_repair_user -d home_repair_db -f db/migrate_component_type.sql
+```
+
+Tables: `User`, `ComponentType`, `HomeComponent`, `SearchResult`, `ToolRecommandation`, `ToolSelected`, and `Session` (created but not used by the app yet).
 
 ### 3. Python deps and run
 
